@@ -1,133 +1,254 @@
-require('dotenv').config();
-const { Client, GatewayIntentBits, SlashCommandBuilder, REST, Routes } = require('discord.js');
-const express = require('express');
-const cors = require('cors');
+require('dotenv').config()
+const {
+  Client,
+  GatewayIntentBits,
+  SlashCommandBuilder,
+  PermissionsBitField,
+  EmbedBuilder,
+  REST,
+  Routes
+} = require('discord.js')
 
+/* =======================
+   GLOBAL SHARED DATA
+======================= */
+global.staffData = []
+global.history = []
+
+function getRanks(){
+  return ['Staff','Senior Staff','Manager','HR','Ownership']
+}
+
+/* =======================
+   RANK LOGIC
+======================= */
+function getRank(member){
+  if (
+    member.id === member.guild.ownerId ||
+    member.permissions.has(PermissionsBitField.Flags.Administrator) ||
+    member.permissions.has(PermissionsBitField.Flags.ManageGuild)
+  ) return 'Ownership'
+
+  if (member.permissions.has(PermissionsBitField.Flags.ManageRoles))
+    return 'HR'
+
+  if (member.permissions.has(PermissionsBitField.Flags.ModerateMembers))
+    return 'Staff'
+
+  return null
+}
+
+function canAct(executor, target){
+  const ranks = getRanks()
+  return ranks.indexOf(executor.rank) > ranks.indexOf(target.rank)
+}
+
+/* =======================
+   CLIENT
+======================= */
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
-});
+  intents:[
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers
+  ]
+})
 
-const staffDB = {}; // in-memory
-
-function resolveRole(member) {
-  if (member.permissions.has('Administrator') || member.permissions.has('ManageGuild')) return 'Ownership+';
-  if (member.permissions.has('ManageRoles')) return 'HR';
-  if (member.permissions.has('ModerateMembers')) return 'Staff';
-  return 'Guest';
-}
-
-function ensureStaff(member) {
-  staffDB[member.id] ??= {
-    id: member.id,
-    username: member.user.username,
-    role: resolveRole(member),
-    strikes: 0,
-    history: [],
-    moderation: { warn:0, mute:0, kick:0, ban:0 }
-  };
-  staffDB[member.id].role = resolveRole(member);
-  staffDB[member.id].username = member.user.username;
-}
-
+/* =======================
+   SLASH COMMANDS
+======================= */
 const commands = [
-  new SlashCommandBuilder().setName('stafflist').setDescription('Show staff list'),
-  new SlashCommandBuilder().setName('promote').setDescription('Promote staff')
-    .addUserOption(o=>o.setName('user').setRequired(true))
-    .addStringOption(o=>o.setName('reason')),
-  new SlashCommandBuilder().setName('demote').setDescription('Demote staff')
-    .addUserOption(o=>o.setName('user').setRequired(true))
-    .addStringOption(o=>o.setName('reason')),
-  new SlashCommandBuilder().setName('strike').setDescription('Strike staff')
-    .addUserOption(o=>o.setName('user').setRequired(true))
-    .addStringOption(o=>o.setName('reason')),
-  new SlashCommandBuilder().setName('syncroles').setDescription('Sync roles')
-];
+  new SlashCommandBuilder()
+    .setName('promote')
+    .setDescription('Promote a staff member')
+    .addUserOption(o=>o.setName('user').setDescription('Staff member').setRequired(true))
+    .addStringOption(o=>o.setName('reason').setDescription('Reason').setRequired(true)),
 
-const rest = new REST({version:'10'}).setToken(process.env.TOKEN);
-(async()=>{
+  new SlashCommandBuilder()
+    .setName('demote')
+    .setDescription('Demote a staff member')
+    .addUserOption(o=>o.setName('user').setDescription('Staff member').setRequired(true))
+    .addStringOption(o=>o.setName('reason').setDescription('Reason').setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('strike')
+    .setDescription('Strike a staff member')
+    .addUserOption(o=>o.setName('user').setDescription('Staff member').setRequired(true))
+    .addStringOption(o=>o.setName('reason').setDescription('Reason').setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('stafflist')
+    .setDescription('View staff list'),
+
+  new SlashCommandBuilder()
+    .setName('syncroles')
+    .setDescription('Sync staff roles from permissions')
+]
+
+/* =======================
+   REGISTER COMMANDS
+======================= */
+const rest = new REST({ version:'10' }).setToken(process.env.DISCORD_BOT_TOKEN)
+
+;(async()=>{
   await rest.put(
-    Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
-    { body: commands.map(c=>c.toJSON()) }
-  );
-})();
+    Routes.applicationGuildCommands(
+      process.env.DISCORD_CLIENT_ID,
+      process.env.GUILD_ID
+    ),
+    { body: commands }
+  )
+})()
 
-client.on('ready', ()=>{
-  console.log('Bot online');
-  client.user.setActivity('Staff & Community');
-});
+/* =======================
+   READY
+======================= */
+client.once('ready', async()=>{
+  client.user.setActivity('staff & community')
 
-client.on('interactionCreate', async i=>{
-  if(!i.isChatInputCommand()) return;
+  const guild = await client.guilds.fetch(process.env.GUILD_ID)
+  const members = await guild.members.fetch()
 
-  const member = await i.guild.members.fetch(i.user.id);
-  ensureStaff(member);
+  global.staffData = []
+  members.forEach(m=>{
+    const rank = getRank(m)
+    if(rank){
+      global.staffData.push({
+        id: m.id,
+        username: m.user.username,
+        avatar: m.user.displayAvatarURL(),
+        rank,
+        strikes: 0
+      })
+    }
+  })
 
-  const isHR = ['HR','Ownership+'].includes(staffDB[i.user.id].role);
-  const targetUser = i.options.getUser('user');
-  if(targetUser) {
-    const tMember = await i.guild.members.fetch(targetUser.id);
-    ensureStaff(tMember);
+  console.log(`✅ Bot online as ${client.user.tag}`)
+})
+
+/* =======================
+   INTERACTIONS
+======================= */
+client.on('interactionCreate', async interaction=>{
+  if(!interaction.isChatInputCommand()) return
+
+  const member = interaction.member
+  const myRank = getRank(member)
+
+  if(!myRank)
+    return interaction.reply({ content:'❌ Staff only', ephemeral:true })
+
+  if(interaction.commandName === 'stafflist'){
+    const embed = new EmbedBuilder()
+      .setTitle('Staff List')
+      .setColor('#5865F2')
+      .setDescription(
+        global.staffData.map(s =>
+          `**${s.username}** — ${s.rank} | Strikes: ${s.strikes}`
+        ).join('\n')
+      )
+
+    return interaction.reply({ embeds:[embed] })
   }
 
-  if(i.commandName === 'stafflist') {
-    return i.reply(
-      Object.values(staffDB)
-        .filter(s=>s.role!=='Guest')
-        .map(s=>`${s.username} — ${s.role} — ${s.strikes} strikes`)
-        .join('\n') || 'No staff'
-    );
+  if(interaction.commandName === 'syncroles'){
+    if(myRank !== 'Ownership')
+      return interaction.reply({ content:'❌ Ownership only', ephemeral:true })
+
+    const guild = interaction.guild
+    const members = await guild.members.fetch()
+
+    global.staffData = []
+    members.forEach(m=>{
+      const rank = getRank(m)
+      if(rank){
+        global.staffData.push({
+          id:m.id,
+          username:m.user.username,
+          avatar:m.user.displayAvatarURL(),
+          rank,
+          strikes:0
+        })
+      }
+    })
+
+    return interaction.reply('✅ Staff roles synced')
   }
 
-  if(i.commandName === 'syncroles') {
-    const members = await i.guild.members.fetch();
-    members.forEach(m=>ensureStaff(m));
-    return i.reply('Roles synced');
+  const targetUser = interaction.options.getUser('user')
+  const reason = interaction.options.getString('reason')
+
+  const executor = global.staffData.find(s=>s.id===member.id)
+  const target = global.staffData.find(s=>s.id===targetUser.id)
+
+  if(!target)
+    return interaction.reply({ content:'❌ Target is not staff', ephemeral:true })
+
+  if(!canAct(executor, target))
+    return interaction.reply({ content:'❌ Target is same or higher rank', ephemeral:true })
+
+  if(interaction.commandName === 'strike'){
+    target.strikes++
+
+    global.history.push({
+      time:new Date().toLocaleString(),
+      action:'Strike',
+      executor:member.user.username,
+      target:target.username,
+      reason
+    })
+
+    return interaction.reply({
+      embeds:[
+        new EmbedBuilder()
+          .setColor('#ED4245')
+          .setTitle('Staff Strike')
+          .setDescription(`⚠ **${target.username}** received a strike\n**Reason:** ${reason}`)
+      ]
+    })
   }
 
-  if(!isHR) return i.reply({content:'❌ HR+ only',ephemeral:true});
+  if(interaction.commandName === 'promote'){
+    const ranks = getRanks()
+    target.rank = ranks[ranks.indexOf(target.rank)+1] || target.rank
 
-  const reason = i.options.getString('reason') || 'No reason';
-  const target = staffDB[targetUser.id];
+    global.history.push({
+      time:new Date().toLocaleString(),
+      action:'Promote',
+      executor:member.user.username,
+      target:target.username,
+      reason
+    })
 
-  if(i.commandName==='promote') target.role='Senior Staff';
-  if(i.commandName==='demote') target.role='Staff';
-  if(i.commandName==='strike') target.strikes++;
+    return interaction.reply({
+      embeds:[
+        new EmbedBuilder()
+          .setColor('#57F287')
+          .setDescription(`⬆ **${target.username}** promoted\n**Reason:** ${reason}`)
+      ]
+    })
+  }
 
-  target.history.push({
-    action: i.commandName,
-    by: i.user.username,
-    reason,
-    date: new Date()
-  });
+  if(interaction.commandName === 'demote'){
+    const ranks = getRanks()
+    target.rank = ranks[ranks.indexOf(target.rank)-1] || target.rank
 
-  i.reply(`✅ ${i.commandName} applied to ${target.username}`);
-});
+    global.history.push({
+      time:new Date().toLocaleString(),
+      action:'Demote',
+      executor:member.user.username,
+      target:target.username,
+      reason
+    })
 
-// ===== API =====
-const api = express();
-api.use(cors());
-api.use(express.json());
+    return interaction.reply({
+      embeds:[
+        new EmbedBuilder()
+          .setColor('#FEE75C')
+          .setDescription(`⬇ **${target.username}** demoted\n**Reason:** ${reason}`)
+      ]
+    })
+  }
+})
 
-api.get('/api/staff', (_,res)=>res.json(Object.values(staffDB)));
+client.login(process.env.DISCORD_BOT_TOKEN)
 
-api.post('/api/action',(req,res)=>{
-  const { executorId, targetId, type, reason } = req.body;
-  const exec = staffDB[executorId];
-  if(!exec || !['HR','Ownership+'].includes(exec.role))
-    return res.json({error:'NO_PERMISSION'});
-
-  const target = staffDB[targetId];
-  if(!target) return res.json({error:'NO_TARGET'});
-
-  if(type==='promote') target.role='Senior Staff';
-  if(type==='demote') target.role='Staff';
-  if(type==='strike') target.strikes++;
-
-  target.history.push({action:type,by:exec.username,reason,date:new Date()});
-  res.json({ok:true});
-});
-
-api.listen(process.env.API_PORT);
-client.login(process.env.TOKEN);
-
-module.exports = { staffDB };
