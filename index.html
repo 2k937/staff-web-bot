@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Staff Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+:root{
+  --bg:#0b0f1a;
+  --card:#12172a;
+  --accent:#5865f2;
+  --good:#2ecc71;
+  --bad:#e74c3c;
+}
+*{box-sizing:border-box;font-family:Inter}
+body{margin:0;background:linear-gradient(120deg,#0b0f1a,#0e1430);color:#fff;overflow:hidden}
+button{cursor:pointer;border:none;border-radius:12px;padding:12px 18px;font-weight:600}
+.hidden{display:none}
+
+/* LOGIN */
+#login{
+  height:100vh;display:flex;align-items:center;justify-content:center;
+  animation:fadeIn 1s
+}
+#login button{
+  background:var(--accent);color:white;font-size:18px;
+  box-shadow:0 10px 30px rgba(88,101,242,.5)
+}
+
+/* DASHBOARD */
+#app{
+  height:100vh;display:grid;
+  grid-template-columns:260px 1fr;
+  animation:slideIn .6s ease
+}
+nav{
+  background:#0d1224;padding:20px;
+}
+nav h2{margin-bottom:20px}
+nav button{
+  width:100%;margin-bottom:10px;background:#1b2040;color:#fff
+}
+main{
+  padding:25px;overflow:auto
+}
+.card{
+  background:var(--card);
+  border-radius:20px;
+  padding:20px;
+  margin-bottom:20px;
+  animation:fadeUp .4s ease
+}
+.staff{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:10px;border-bottom:1px solid #1f2450
+}
+.staff img{width:42px;border-radius:50%}
+.actions button{margin-left:6px}
+
+/* Animations */
+@keyframes slideIn{from{transform:translateX(100px);opacity:0}to{opacity:1}}
+@keyframes fadeUp{from{transform:translateY(20px);opacity:0}to{opacity:1}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+</style>
+</head>
+
+<body>
+
+<div id="login">
+  <button onclick="location.href='/auth/discord'">Login with Discord</button>
+</div>
+
+<div id="app" class="hidden">
+  <nav>
+    <h2>Staff Panel</h2>
+    <button onclick="tab('staff')">Staff</button>
+    <button onclick="tab('history')">History</button>
+    <button onclick="tab('charts')">Charts</button>
+  </nav>
+
+  <main>
+    <div id="staff" class="tab card"></div>
+    <div id="history" class="tab card hidden"></div>
+    <div id="charts" class="tab card hidden">
+      <canvas id="modChart"></canvas>
+    </div>
+  </main>
+</div>
+
+<script>
+let me=null, staff=[], history=[]
+
+function tab(id){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.add('hidden'))
+  document.getElementById(id).classList.remove('hidden')
+}
+
+async function load(){
+  const res=await fetch('/api/me')
+  if(!res.ok) return
+  me=await res.json()
+  document.getElementById('login').classList.add('hidden')
+  document.getElementById('app').classList.remove('hidden')
+  refresh()
+}
+
+async function refresh(){
+  staff=await (await fetch('/api/staff')).json()
+  history=await (await fetch('/api/history')).json()
+
+  document.getElementById('staff').innerHTML=
+    staff.map(s=>`
+      <div class="staff">
+        <div>
+          <img src="${s.avatar}">
+          ${s.username} (${s.rank}) | Strikes: ${s.strikes}
+        </div>
+        <div class="actions">
+          ${me.canHR?`
+          <button onclick="act('promote','${s.id}')">⬆</button>
+          <button onclick="act('demote','${s.id}')">⬇</button>
+          <button onclick="act('strike','${s.id}')">⚠</button>`:''}
+        </div>
+      </div>
+    `).join('')
+
+  document.getElementById('history').innerHTML=
+    history.map(h=>`<p>${h.time} — ${h.action} → ${h.target}</p>`).join('')
+
+  chart()
+}
+
+async function act(type,id){
+  const reason=prompt('Reason?')
+  await fetch('/api/action',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({type,id,reason})
+  })
+  refresh()
+}
+
+function chart(){
+  const ctx=document.getElementById('modChart')
+  new Chart(ctx,{
+    type:'bar',
+    data:{
+      labels:['Warn','Mute','Kick','Ban'],
+      datasets:[{data:[3,1,0,0]}]
+    }
+  })
+}
+
+setInterval(refresh,5000)
+load()
+</script>
+</body>
+</html>
